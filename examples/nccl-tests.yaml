@@ -14,15 +14,24 @@ spec:
           restartPolicy: OnFailure
           initContainers:
           - image: crusoecloud/nccl-tests:h100-23.10-py3
+            imagePullPolicy: IfNotPresent
             name: init
             command: ["sh", "-c", "sleep 5"]
+          volumes:
+          - name: nccl_topo
+            hostPath:
+              path: /etc/crusoe/nccl_topo
+              type: Directory
           containers:
           - image: crusoecloud/nccl-tests:h100-23.10-py3
-            imagePullPolicy: Always
+            imagePullPolicy: IfNotPresent
+            volumeMounts:
+            - name: nccl_topo
+              mountPath: /opt/nccl_topo
             name: nccl-test-launcher
             env:
              - name: NCCL_TOPO_FILE
-               value: /opt/h100-80gb-sxm-ib.xml
+               value: /opt/nccl_topo/h100-80gb-sxm-ib-cloud-hypervisor.xml
             command:
             - /opt/hpcx/ompi/bin/mpirun
             - --allow-run-as-root
@@ -42,6 +51,12 @@ spec:
             - NCCL_IB_SPLIT_DATA_ON_QPS=0
             - -x 
             - NCCL_IB_QPS_PER_CONNECTION=2
+            - -x
+            - NCCL_IB_MERGE_VFS=0
+            - -x
+            - NCCL_IB_HCA=^mlx5_0:1 
+            - -x
+            - NCCL_IBEXT_DISABLE=1 
             - -x
             - NCCL_TOPO_FILE
             - -x
@@ -76,13 +91,19 @@ spec:
           - name: dshm
             emptyDir:
               medium: Memory
+          - name: nccl_topo
+            hostPath:
+              path: /etc/crusoe/nccl_topo
+              type: Directory
           containers:
           - image: crusoecloud/nccl-tests:h100-23.10-py3
-            imagePullPolicy: Always
+            imagePullPolicy: IfNotPresent
             name: nccl-worker
             volumeMounts:
             - mountPath: /dev/shm
               name: dshm
+            - name: nccl_topo
+              mountPath: /opt/nccl_topo
             resources:
               limits:
                 nvidia.com/gpu: 8

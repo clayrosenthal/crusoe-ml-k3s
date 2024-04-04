@@ -1,21 +1,14 @@
 terraform {
   required_providers {
     crusoe = {
-      source = "registry.terraform.io/crusoecloud/crusoe"
+      source = "crusoecloud/crusoe"
     }
   }
 }
 
 locals {
-  my_ssh_privkey_path="</path/to/priv.key>"
-  my_ssh_pubkey="<pub-key>"
-  worker_instance_type = "h100-80gb-sxm-ib.8x"
-  worker_image = "ubuntu22.04-nvidia-sxm-docker:latest"
-  ib_partition_id = "<ib_partition_id>"
-  count_workers = 2
-  headnode_instance_type="c1a.8x"
-  deploy_location = "us-east1-a"
-  haproxy_local = <<-EOT
+  use_lb            = var.headnode_count > 1
+  haproxy_local     = !local.use_lb ? "" : <<-EOT
     global
         log /dev/log local0
         log /dev/log local1 notice
@@ -41,178 +34,132 @@ locals {
     backend k3s_nodes
         mode tcp
         balance roundrobin
-        server k3s_node1 ${crusoe_compute_instance.k3s_0.network_interfaces[0].private_ipv4.address}:6443 check
-        server k3s_node2 ${crusoe_compute_instance.k3s_1.network_interfaces[0].private_ipv4.address}:6443 check
-        server k3s_node3 ${crusoe_compute_instance.k3s_2.network_interfaces[0].private_ipv4.address}:6443 check
+        %{for index, instance in crusoe_compute_instance.k3s_headnode~}
+        server k3s_node${index} ${instance.network_interfaces[0].private_ipv4.address}:6443 check
+        %{endfor~}
   EOT
-}
-
-resource "local_file" "haproxy_config" {
-  filename = "haproxy.cfg"
-  content  = local.haproxy_local
+  headnode_entry    = local.use_lb ? one(crusoe_compute_instance.k3s_lb) : one(crusoe_compute_instance.k3s_headnode)
+  ingress_interface = local.headnode_entry.network_interfaces[0]
+  headnode_has_gpu  = strcontains(var.headnode_instance_type, "sxm-ib")
 }
 
 
 resource "crusoe_compute_instance" "k3s_lb" {
-    depends_on = [local_file.haproxy_config]
-    name = "crusoe-k3s-lb"
-    type = local.headnode_instance_type
-    ssh_key = local.my_ssh_pubkey
-    location = local.deploy_location
-    image = "ubuntu22.04:latest"
-    startup_script = file("k3haproxy-install.sh")
+  count          = local.use_lb ? 1 : 0
+  name           = "${var.instance_name_prefix}-k3s-lb"
+  type           = var.headnode_instance_type
+  ssh_key        = var.ssh_pubkey
+  location       = var.deploy_location
+  image          = var.headnode_image
+  startup_script = file("${path.module}/k3haproxy-install.sh")
 
-    provisioner "local-exec" {
-      command = "crusoe compute vms get ${self.name} -f json > /tmp/metadata.${self.name}.json"
-    }
-
-    provisioner "file" {
-      source      = "haproxy.cfg"
-      destination = "/tmp/haproxy.cfg"
-      connection {
-        type = "ssh"
-        user = "root"
-        host = "${self.network_interfaces[0].public_ipv4.address}"
-        private_key = file("${local.my_ssh_privkey_path}")
-      }
-    }
-}
-
-resource "crusoe_compute_instance" "k3s_0" {
-    name = "crusoe-k3s-0"
-    type = local.headnode_instance_type
-    ssh_key = local.my_ssh_pubkey
-    location = local.deploy_location
-    image = "ubuntu22.04:latest"
-    startup_script = file("k3install-main.sh")
-
-    provisioner "local-exec" {
-      command = "crusoe compute vms get ${self.name} -f json > /tmp/metadata.${self.name}.json"
-    }
-    provisioner "file" {
-      source      = "k3-0-serve-token.py"
-      destination = "/opt/k3-0-serve-token.py"
-      connection {
-        type = "ssh"
-        user = "root"
-        host = "${self.network_interfaces[0].public_ipv4.address}"
-        private_key = file("${local.my_ssh_privkey_path}")
-      }
-    }
-    provisioner "file" {
-      source      = "/tmp/metadata.${crusoe_compute_instance.k3s_0.name}.json"
-      destination = "/root/k3-0-main.json"
-      connection {
-        type = "ssh"
-        user = "root"
-        host = "${self.network_interfaces[0].public_ipv4.address}"
-        private_key = file("${local.my_ssh_privkey_path}")
-      }
-    }
-}
-
-resource "crusoe_compute_instance" "k3s_1" {
-    depends_on = [crusoe_compute_instance.k3s_0]
-    name = "crusoe-k3s-1"
-    type = local.headnode_instance_type
-    ssh_key = local.my_ssh_pubkey
-    location = local.deploy_location
-    image = "ubuntu22.04:latest"
-    startup_script = file("k3install-child.sh")
-
-    provisioner "file" {
-      source      = "/tmp/metadata.${crusoe_compute_instance.k3s_0.name}.json"
-      destination = "/root/k3-0-main.json"
-      connection {
-        type = "ssh"
-        user = "root"
-        host = "${self.network_interfaces[0].public_ipv4.address}"
-        private_key = file("${local.my_ssh_privkey_path}")
-      }
-    }
-}
-
-resource "crusoe_compute_instance" "k3s_2" {
-    depends_on = [crusoe_compute_instance.k3s_0]
-    name = "crusoe-k3s-2"
-    type = local.headnode_instance_type
-    ssh_key = local.my_ssh_pubkey
-    location = local.deploy_location
-    image = "ubuntu22.04:latest"
-    startup_script = file("k3install-child.sh")
-
-    provisioner "file" {
-      source      = "/tmp/metadata.${crusoe_compute_instance.k3s_0.name}.json"
-      destination = "/root/k3-0-main.json"
-      connection {
-        type = "ssh"
-        user = "root"
-        host = "${self.network_interfaces[0].public_ipv4.address}"
-        private_key = file("${local.my_ssh_privkey_path}")
-      }
-    }
-}
-
-resource "null_resource" "copy-lb-file" {
-  depends_on = [crusoe_compute_instance.k3s_lb]
   provisioner "file" {
-      source      = "/tmp/metadata.${crusoe_compute_instance.k3s_lb.name}.json"
-      destination = "/root/k3-lb-main.json"
-      connection {
-        type = "ssh"
-        user = "root"
-        host = "${crusoe_compute_instance.k3s_0.network_interfaces[0].public_ipv4.address}"
-        private_key = file("${local.my_ssh_privkey_path}")
-      }
+    content     = local.haproxy_local
+    destination = "/tmp/haproxy.cfg"
+    connection {
+      type        = "ssh"
+      user        = "root"
+      host        = self.network_interfaces[0].public_ipv4.address
+      private_key = file("${var.ssh_privkey_path}")
     }
+  }
+}
+
+resource "crusoe_compute_instance" "k3s_headnode" {
+  count    = var.headnode_count
+  name     = "${var.instance_name_prefix}-k3s-${count.index}"
+  type     = var.headnode_instance_type
+  ssh_key  = var.ssh_pubkey
+  location = var.deploy_location
+  image    = var.headnode_image
+  startup_script = templatefile("${path.module}/k3install-headnode.sh.tftpl",
+    {
+      is_main_headnode = count.index == 0
+      headnode_has_gpu = local.headnode_has_gpu
+    }
+  )
+  host_channel_adapters = local.headnode_has_gpu ? [{ ib_partition_id = var.ib_partition_id }] : []
+
+
+  provisioner "file" {
+    source      = "${path.module}/k3-0-serve-token.py"
+    destination = "/opt/k3-0-serve-token.py"
+    connection {
+      type        = "ssh"
+      user        = "root"
+      host        = self.network_interfaces[0].public_ipv4.address
+      private_key = file("${var.ssh_privkey_path}")
+    }
+  }
+}
+
+resource "terraform_data" "copy-k3-files" {
+  depends_on = [local.headnode_entry]
+  count      = var.headnode_count
+  provisioner "file" {
+    content     = jsonencode(crusoe_compute_instance.k3s_headnode[0])
+    destination = "/root/k3-0-main.json"
+    connection {
+      type        = "ssh"
+      user        = "root"
+      host        = crusoe_compute_instance.k3s_headnode[count.index].network_interfaces[0].public_ipv4.address
+      private_key = file("${var.ssh_privkey_path}")
+    }
+  }
+  provisioner "file" {
+    content     = jsonencode(local.headnode_entry)
+    destination = "/root/k3-lb-main.json"
+    connection {
+      type        = "ssh"
+      user        = "root"
+      host        = crusoe_compute_instance.k3s_headnode[count.index].network_interfaces[0].public_ipv4.address
+      private_key = file("${var.ssh_privkey_path}")
+    }
+  }
 
 }
 
 resource "crusoe_compute_instance" "workers" {
-    depends_on = [crusoe_compute_instance.k3s_lb]
-    count = local.count_workers
-    name = "crusoe-k3s-worker-${count.index}"
-    type = local.worker_instance_type
-    ssh_key = local.my_ssh_pubkey
-    location = local.deploy_location
-    image = local.worker_image
-    startup_script = file("k3install-worker.sh")
-    host_channel_adapters = [{ib_partition_id = local.ib_partition_id}]
-    provisioner "file" {
-      source      = "/tmp/metadata.${crusoe_compute_instance.k3s_0.name}.json"
-      destination = "/root/k3-0-main.json"
-      connection {
-        type = "ssh"
-        user = "root"
-        host = "${self.network_interfaces[0].public_ipv4.address}"
-        private_key = file("${local.my_ssh_privkey_path}")
-      }
+  depends_on            = [local.headnode_entry]
+  count                 = var.worker_count
+  name                  = "${var.instance_name_prefix}-k3s-worker-${count.index}"
+  type                  = var.worker_instance_type
+  ssh_key               = var.ssh_pubkey
+  location              = var.deploy_location
+  image                 = var.worker_image
+  startup_script        = file("${path.module}/k3install-worker.sh")
+  host_channel_adapters = [{ ib_partition_id = var.ib_partition_id }]
+  provisioner "file" {
+    content     = jsonencode(crusoe_compute_instance.k3s_headnode[0])
+    destination = "/root/k3-0-main.json"
+    connection {
+      type        = "ssh"
+      user        = "root"
+      host        = self.network_interfaces[0].public_ipv4.address
+      private_key = file("${var.ssh_privkey_path}")
     }
+  }
 
-    provisioner "file" {
-      source      = "/tmp/metadata.${crusoe_compute_instance.k3s_lb.name}.json"
-      destination = "/root/k3-lb-main.json"
-      connection {
-        type = "ssh"
-        user = "root"
-        host = "${self.network_interfaces[0].public_ipv4.address}"
-        private_key = file("${local.my_ssh_privkey_path}")
-      }
+  provisioner "file" {
+    content     = jsonencode(local.headnode_entry)
+    destination = "/root/k3-lb-main.json"
+    connection {
+      type        = "ssh"
+      user        = "root"
+      host        = self.network_interfaces[0].public_ipv4.address
+      private_key = file("${var.ssh_privkey_path}")
     }
+  }
 }
 
 resource "crusoe_vpc_firewall_rule" "k3_rule" {
-  network           = crusoe_compute_instance.k3s_lb.network_interfaces[0].network
+  network           = local.ingress_interface.network
   name              = "k3s-pub-access"
   action            = "allow"
   direction         = "ingress"
   protocols         = "tcp"
   source            = "0.0.0.0/0"
   source_ports      = "1-65535"
-  destination       = crusoe_compute_instance.k3s_lb.network_interfaces[0].private_ipv4.address
+  destination       = "${local.ingress_interface.private_ipv4.address}/32"
   destination_ports = "6443"
-}
-
-output "k30-instance_public_ip" {
-  value = crusoe_compute_instance.k3s_0.network_interfaces[0].public_ipv4.address
 }

@@ -1,0 +1,44 @@
+#!/bin/bash
+export DEBIAN_FRONTEND=noninteractive
+sudo apt update
+sudo apt install -y curl jq
+%{ if is_main_headnode ~}
+sudo apt install -y python3-pip
+pip3 install --no-input flask
+%{ endif ~}
+
+%{ if headnode_has_gpu ~}
+curl -s -L https://nvidia.github.io/nvidia-container-runtime/gpgkey | sudo gpg --dearmor -o /usr/share/keyrings/nvidia-archive.gpg
+distribution=$(. /etc/os-release;echo $ID$VERSION_ID)
+curl -s -L "https://nvidia.github.io/nvidia-container-runtime/$distribution/nvidia-container-runtime.list" | \
+    sed 's|deb |deb [signed-by=/usr/share/keyrings/nvidia-archive.gpg] |g' | \
+    sudo tee /etc/apt/sources.list.d/nvidia-container-runtime.list
+sudo apt update && sudo apt install -y nvidia-container-runtime
+%{ endif ~}
+
+while [ ! -e "/root/k3-0-main.json" ]; do echo "Waiting for headnode metadata file to be present..."; sleep 2; done;
+
+main_headnode_priv_ip=$(jq -r ".network_interfaces[0].private_ipv4.address" /root/k3-0-main.json)
+main_headnode_pub_ip=$(jq -r ".network_interfaces[0].public_ipv4.address" /root/k3-0-main.json)
+
+export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
+
+%{ if is_main_headnode ~}
+while [ ! -e "/root/k3-lb-main.json" ]; do echo "Waiting for lb metadata file to be present..."; sleep 2; done;
+lb_host=$(jq -r ".network_interfaces[0].public_ipv4.address" /root/k3-lb-main.json)
+
+curl -sfL https://get.k3s.io | sh -s - server --cluster-init --write-kubeconfig-mode=654 --tls-san $main_headnode_pub_ip,$lb_host
+
+python3 /opt/k3-0-serve-token.py &
+
+%{ else ~}
+url="http://$main_headnode_priv_ip:5500/k3-server-token"
+timeout=60
+
+while ! curl -s --output /dev/null --head --fail --max-time $timeout "$url"; do :; done
+
+k3_token=$(curl -s $url)
+
+curl -sfL https://get.k3s.io | K3S_TOKEN=$k3_token sh -s - server --cluster-init --write-kubeconfig-mode=654 \
+     --server https://$main_headnode_priv_ip:6443
+%{ endif ~}
