@@ -14,7 +14,7 @@ If the Terraform below fails contact support@crusoecloud.com for help.
 
 ## Deployment
 
-To use as a module fill in the `variables` in a `main.tf` file
+To use as a module fill in the `variables` in your own `main.tf` file
 
 ```
 module "crusoe" {
