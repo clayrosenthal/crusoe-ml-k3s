@@ -7,8 +7,8 @@ terraform {
 }
 
 locals {
-  use_lb            = var.headnode_count > 1
-  haproxy_local     = !local.use_lb ? "" : <<-EOT
+  use_lb            = var.headnode_count > 1s
+  haproxy_config     = !local.use_lb ? "" : <<-EOT
     global
         log /dev/log local0
         log /dev/log local1 notice
@@ -34,10 +34,10 @@ locals {
     backend k3s_nodes
         mode tcp
         balance roundrobin
-        %{for index, instance in crusoe_compute_instance.k3s_headnode~}
+        %{~ for index, instance in crusoe_compute_instance.k3s_headnode ~}
         server k3s_node${index} ${instance.network_interfaces[0].private_ipv4.address}:6443 check
-        %{endfor~}
-  EOT
+        %{~ endfor ~}
+    EOT
   headnode_entry    = local.use_lb ? one(crusoe_compute_instance.k3s_lb) : one(crusoe_compute_instance.k3s_headnode)
   ingress_interface = local.headnode_entry.network_interfaces[0]
   headnode_has_gpu  = strcontains(var.headnode_instance_type, "sxm-ib")
@@ -54,7 +54,7 @@ resource "crusoe_compute_instance" "k3s_lb" {
   startup_script = file("${path.module}/k3haproxy-install.sh")
 
   provisioner "file" {
-    content     = local.haproxy_local
+    content     = local.haproxy_config
     destination = "/tmp/haproxy.cfg"
     connection {
       type        = "ssh"
