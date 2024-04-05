@@ -18,7 +18,7 @@ spec:
             name: init
             command: ["sh", "-c", "sleep 5"]
           volumes:
-          - name: nccl_topo
+          - name: nccl-topo
             hostPath:
               path: /etc/crusoe/nccl_topo
               type: Directory
@@ -26,7 +26,7 @@ spec:
           - image: crusoecloud/nccl-tests:h100-23.10-py3
             imagePullPolicy: IfNotPresent
             volumeMounts:
-            - name: nccl_topo
+            - name: nccl-topo
               mountPath: /opt/nccl_topo
             name: nccl-test-launcher
             env:
@@ -91,7 +91,7 @@ spec:
           - name: dshm
             emptyDir:
               medium: Memory
-          - name: nccl_topo
+          - name: nccl-topo
             hostPath:
               path: /etc/crusoe/nccl_topo
               type: Directory
@@ -102,7 +102,7 @@ spec:
             volumeMounts:
             - mountPath: /dev/shm
               name: dshm
-            - name: nccl_topo
+            - name: nccl-topo
               mountPath: /opt/nccl_topo
             resources:
               limits:
