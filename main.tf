@@ -78,7 +78,7 @@ resource "crusoe_compute_instance" "k3s_headnode" {
       headnode_has_gpu = local.headnode_has_gpu
     }
   )
-  host_channel_adapters = local.headnode_has_gpu ? [{ ib_partition_id = var.ib_partition_id }] : []
+  host_channel_adapters = local.headnode_has_gpu ? [{ ib_partition_id = var.ib_partition_id }] : null
 
 
   provisioner "file" {
